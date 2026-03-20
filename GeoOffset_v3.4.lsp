@@ -1,20 +1,23 @@
 ;;; ================================================================
 ;;; GeoOffset.lsp v3.4
-;;; ������ � ���������� ���������� ����������� �����
-;;; �� ��������� ����� � ��������
+;;; Расчёт и оформление отклонений фактических точек
+;;; от проектных линий и контуров
 ;;; AutoCAD 2013-2026 / BricsCAD Pro / Civil 3D
 ;;;
-;;; v3.4 � FIX: ������� VALUE ������ ��������������
-;;;         (Rotation = 0 ���������� ������ ��������)
-;;; v3.0 � DCL: image_button + fill_image ��� ������ ������/�����
-;;;         FIX: ������ ������������ �� ��������� �� k
-;;;         ������� �����: DIMSCALE ��� �������
-;;;         ��������� ������� ����� ������������ �������� �����
+;;; v3.4 — FIX: атрибут VALUE всегда горизонтальный
+;;;         (Rotation = 0 независимо от угла стрелки)
+;;;         FIX: inside/outside для ЛЮБЫХ замкнутых контуров
+;;;         (определение направления обхода CW/CCW через
+;;;          знаковую площадь — ранее работало только для круга)
+;;; v3.0 — DCL: image_button + fill_image для цветов Хорошо/Плохо
+;;;         FIX: допуск сравнивается ДО умножения на k
+;;;         Масштаб блока: DIMSCALE или вручную
+;;;         Отражение стрелок через динамический параметр блока
 ;;; ================================================================
 (vl-load-com)
 
 ;;; ================================================================
-;;; ���������� ����������
+;;; ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
 ;;; ================================================================
 (if (null *geo:side-closed*)   (setq *geo:side-closed*   "to_point"))
 (if (null *geo:side-open*)     (setq *geo:side-open*     "to_point"))
@@ -31,24 +34,24 @@
 (if (null *geo:tol-elev-hi*)  (setq *geo:tol-elev-hi*   0.0))
 (if (null *geo:elev-mode*)     (setq *geo:elev-mode*     "manual"))
 (if (null *geo:elev-val*)     (setq *geo:elev-val*      0.0))
-(if (null *geo:blk-scale*)    (setq *geo:blk-scale*     0.0))  ; 0 = ���� (DIMSCALE)
+(if (null *geo:blk-scale*)    (setq *geo:blk-scale*     0.0))  ; 0 = авто (DIMSCALE)
 (if (null *geo:color*)         (setq *geo:color*         80))
-(if (null *geo:color-ok*)      (setq *geo:color-ok*      3))   ; ������ = ������
-(if (null *geo:color-fail*)    (setq *geo:color-fail*    1))   ; ������� = �����
+(if (null *geo:color-ok*)      (setq *geo:color-ok*      3))   ; зелёный = Хорошо
+(if (null *geo:color-fail*)    (setq *geo:color-fail*    1))   ; красный = Плохо
 (if (null *geo:opt-onepoint*)  (setq *geo:opt-onepoint*  "0"))
 (if (null *geo:opt-short*)     (setq *geo:opt-short*     "0"))
 (if (null *geo:opt-leader*)    (setq *geo:opt-leader*    "0"))
 (if (null *geo:opt-fixpos*)    (setq *geo:opt-fixpos*    "1"))
 (if (null *geo:proj-filter*)   (setq *geo:proj-filter*   nil))
 (if (null *geo:fact-filter*)   (setq *geo:fact-filter*   nil))
-(if (null *geo:proj-info*)     (setq *geo:proj-info*     "�� �����"))
-(if (null *geo:fact-info*)     (setq *geo:fact-info*     "�� �����"))
+(if (null *geo:proj-info*)     (setq *geo:proj-info*     "Не задан"))
+(if (null *geo:fact-info*)     (setq *geo:fact-info*     "Не задан"))
 (setq *geo:styles-list* nil)
 (setq *geo:layers-list* nil)
 (setq *geo:layers-plus* nil)
 
 ;;; ================================================================
-;;; �������� ����� Geo_Arrow
+;;; СОЗДАНИЕ БЛОКА Geo_Arrow
 ;;; ================================================================
 (defun geo:create-arrow-block ( / as th )
   (if (not (tblsearch "BLOCK" "Geo_Arrow"))
@@ -63,7 +66,7 @@
                      (cons 11 (list (* as 0.25) (* as 0.45) 0.0))
                      (cons 12 (list 0.0 0.0 0.0))
                      (cons 13 (list 0.0 0.0 0.0))))
-      ;; ATTDEF VALUE � �������
+      ;; ATTDEF VALUE — скрытый
       (entmake (list '(0 . "ATTDEF") '(100 . "AcDbEntity") '(8 . "0") '(62 . 256)
                      '(100 . "AcDbText")
                      (cons 10 (list (* as 1.5) 0.0 0.0))
@@ -71,7 +74,7 @@
                      '(100 . "AcDbAttributeDefinition")
                      '(3 . "Offset Value") '(2 . "VALUE")
                      '(70 . 1) '(280 . 0)))
-      ;; ATTDEF DISPLAY � �������
+      ;; ATTDEF DISPLAY — видимый
       (entmake (list '(0 . "ATTDEF") '(100 . "AcDbEntity") '(8 . "0") '(62 . 256)
                      '(100 . "AcDbText")
                      (cons 10 (list (* as 1.5) (* as 0.5) 0.0))
@@ -81,13 +84,13 @@
                      '(3 . "Display Text") '(2 . "DISPLAY")
                      '(70 . 0) '(72 . 0) '(74 . 2) '(280 . 0)))
       (entmake '((0 . "ENDBLK")))
-      (princ "\n[GeoOffset] ���� Geo_Arrow ������.")
+      (princ "\n[GeoOffset] Блок Geo_Arrow создан.")
     )
   )
 )
 
 ;;; ================================================================
-;;; �������
+;;; УТИЛИТЫ
 ;;; ================================================================
 (defun geo:ensure-layer ( layName layColor / )
   (if (not (tblsearch "LAYER" layName))
@@ -104,7 +107,7 @@
 
 (defun geo:get-obj-coords ( ent ) (cdr (assoc 10 (entget ent))))
 
-;;; ���������� ������ ��� rtos/itoa (������ �� nil > numberp)
+;;; Безопасные обёртки для rtos/itoa (защита от nil > numberp)
 (defun geo:safe-rtos ( val mode prec / )
   (if (numberp val) (rtos val mode prec) "0"))
 (defun geo:safe-itoa ( val / )
@@ -157,20 +160,75 @@
     (T nil)))
 
 ;;; ================================================================
-;;; ���� ����������
+;;; ОПРЕДЕЛЕНИЕ НАПРАВЛЕНИЯ ОБХОДА (CW/CCW)
 ;;; ================================================================
-;;; ���� ����������
-;;; cross > 0 = ����. ����� ����� �� ����������� ������
-;;; cross < 0 = ����. ����� ������ �� ����������� ������
-;;; "left"  = ������� �����  > ���� "+" ���� ����� ����� (cross>0), ����� "-"
-;;; "right" = ������� ������ > ���� "+" ���� ����� ������ (cross<0), ����� "-"
+;;; Знаковая площадь (Shoelace formula):
+;;;   > 0 — обход CCW (против часовой)
+;;;   < 0 — обход CW  (по часовой)
+;;; Круг всегда CCW в AutoCAD.
+;;; Возвращает T если CCW, nil если CW.
+(defun geo:is-ccw ( ent / ed typ pts area i p1 p2
+                          nSamp t0 tEnd dt par cp )
+  (setq ed (entget ent) typ (cdr (assoc 0 ed)))
+  (cond
+    ;; Круг всегда CCW
+    ((= typ "CIRCLE") T)
+    ;; LWPOLYLINE — берём вершины напрямую из DXF
+    ((= typ "LWPOLYLINE")
+     (setq pts '())
+     (foreach pair ed
+       (if (= (car pair) 10)
+         (setq pts (append pts (list (cdr pair))))))
+     (setq area 0.0 i 0)
+     (repeat (length pts)
+       (setq p1 (nth i pts)
+             p2 (nth (rem (1+ i) (length pts)) pts))
+       (setq area (+ area
+                    (- (* (car p1) (cadr p2))
+                       (* (car p2) (cadr p1)))))
+       (setq i (1+ i)))
+     (> area 0.0))
+    ;; Для остальных типов (SPLINE, POLYLINE, ELLIPSE)
+    ;; семплируем точки по параметру кривой
+    (T
+     (setq nSamp 64
+           t0   (vlax-curve-getStartParam ent)
+           tEnd (vlax-curve-getEndParam ent))
+     (if (or (null t0) (null tEnd)) T  ; фоллбэк — CCW
+       (progn
+         (setq dt (/ (- tEnd t0) (float nSamp))
+               pts '() par t0)
+         (repeat nSamp
+           (setq cp (vlax-curve-getPointAtParam ent par))
+           (if cp (setq pts (append pts (list cp))))
+           (setq par (+ par dt)))
+         (if (< (length pts) 3) T  ; недостаточно точек — CCW
+           (progn
+             (setq area 0.0 i 0)
+             (repeat (length pts)
+               (setq p1 (nth i pts)
+                     p2 (nth (rem (1+ i) (length pts)) pts))
+               (setq area (+ area
+                            (- (* (car p1) (cadr p2))
+                               (* (car p2) (cadr p1)))))
+               (setq i (1+ i)))
+             (> area 0.0))))))))
+
+;;; ================================================================
+;;; ЗНАК ОТКЛОНЕНИЯ
+;;; ================================================================
+;;; Знак отклонения
+;;; cross > 0 = факт. точка СЛЕВА от направления кривой
+;;; cross < 0 = факт. точка СПРАВА от направления кривой
+;;; "left"  = стрелки СЛЕВА  > знак "+" если точка слева (cross>0), иначе "-"
+;;; "right" = стрелки СПРАВА > знак "+" если точка справа (cross<0), иначе "-"
 (defun geo:calc-sign ( ent ptFoot ptReal / cross mode )
   (setq cross (geo:cross-z ent ptFoot ptReal)
         mode (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
   (cond
     ((= mode "to_point") (if (> cross 0) "+" "-"))
-    ;; inside/outside/left/right: ���� ������ "+"
-    ;; ����������� ������� ��������, Flip ������������ ������
+    ;; inside/outside/left/right: знак всегда "+"
+    ;; направление задаётся нормалью, Flip корректирует визуал
     ((= mode "inside")   "+")
     ((= mode "outside")  "+")
     ((= mode "left")     "+")
@@ -179,33 +237,45 @@
 
 
 ;;; ================================================================
-;;; ����� �� ��������� (������������ �������� "���������")
+;;; НУЖНО ЛИ ОТРАЖЕНИЕ (динамический параметр "Отражение")
 ;;; ================================================================
-;;; ��� �������� ��������:
-;;;   mode = "left"  > ������� ����� �� ����������� ������.
-;;;   mode = "right" > ������� ������.
-;;; ���� ����������� ����� ��������� �� ��������������� �������
-;;; (�� ����� cross-z), ������� ��� ������ ����� �������
-;;; "���������������". ������ ������ ��������� �������� ���������.
-(defun geo:need-mirror ( ent ptFoot ptReal / cross mode )
+;;; Для открытых контуров:
+;;;   mode = "left"  > стрелки СЛЕВА от направления кривой.
+;;;   mode = "right" > стрелки СПРАВА.
+;;; Если фактическая точка находится на противоположной стороне
+;;; (по знаку cross-z), включаем отражение (Flip).
+;;; [v3.4] Для inside/outside учитываем CW/CCW обход контура.
+;;; Логика Flip: стрелка уже направлена нормалью внутрь/наружу.
+;;; Если фактическая точка на противоположной стороне — Flip.
+(defun geo:need-mirror ( ent ptFoot ptReal / cross mode ccw )
   (setq cross (geo:cross-z ent ptFoot ptReal)
         mode  (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
   (cond
-    ;; --- ����������� ������ ---
-    ;; ������� �����, � ����� ������ > Flip
+    ;; --- Разомкнутый контур ---
+    ;; Стрелки слева, а точка справа > Flip
     ((and (= mode "left")  (< cross 0)) T)
-    ;; ������� ������, � ����� ����� > Flip
+    ;; Стрелки справа, а точка слева > Flip
     ((and (= mode "right") (> cross 0)) T)
-    ;; --- ��������� ������ ---
-    ;; ������� ������ (������� ������), � ����� ����� (cross>0) > Flip
-    ((and (= mode "inside")  (> cross 0)) T)
-    ;; ������� ������ (������� �����), � ����� ������ (cross<0) > Flip
-    ((and (= mode "outside") (< cross 0)) T)
+    ;; --- Замкнутый контур [v3.4] ---
+    ;; inside: нормаль направлена внутрь. Flip если точка снаружи.
+    ;; outside: нормаль направлена наружу. Flip если точка внутри.
+    ;; CCW: cross>0 = точка слева (снаружи), cross<0 = справа (внутри)
+    ;; CW:  cross>0 = точка слева (внутри), cross<0 = справа (снаружи)
+    ((= mode "inside")
+     (setq ccw (geo:is-ccw ent))
+     (if ccw
+       (> cross 0)    ; CCW: точка снаружи (cross>0) > Flip
+       (< cross 0)))  ; CW:  точка снаружи (cross<0) > Flip
+    ((= mode "outside")
+     (setq ccw (geo:is-ccw ent))
+     (if ccw
+       (< cross 0)    ; CCW: точка внутри (cross<0) > Flip
+       (> cross 0)))  ; CW:  точка внутри (cross>0) > Flip
     (T nil)))
 
 ;;; ================================================================
-;;; LM:setdynpropvalue � ��������� �������� ������������� ���������
-;;; (�� ������� Lee Mac). blk = VLA-������, prp = ��� ���������, val = ��������
+;;; LM:setdynpropvalue — установка значения динамического параметра
+;;; (по мотивам Lee Mac). blk = VLA-объект, prp = имя параметра, val = значение
 ;;; ================================================================
 (defun LM:setdynpropvalue ( blk prp val )
   (setq prp (strcase prp))
@@ -220,9 +290,9 @@
     (vlax-invoke blk 'getdynamicblockproperties)))
 
 ;;; ================================================================
-;;; ��������� ��������� � ������������� ����� Geo_Arrow (���� �����)
-;;; ���������� LM:setdynpropvalue ��� ��������� Flip = 1
-;;; ��� ��������� � �����: "Flip"
+;;; Применить отражение к динамическому блоку Geo_Arrow (если нужно)
+;;; Использует LM:setdynpropvalue для установки Flip = 1
+;;; Имя параметра в блоке: "Flip"
 ;;; ================================================================
 (defun geo:mirror-block-if-needed ( blkObj ent ptFoot ptReal )
   (if (and blkObj
@@ -233,35 +303,44 @@
       (vla-Update blkObj))))
 
 ;;; ================================================================
-;;; ���� �������
+;;; УГОЛ СТРЕЛКИ
 ;;; ================================================================
-;;; ���� ������� � ���������� ����������� �������
-;;; "left"  > ������� = (-dy, dx)  ������ (����� �� ����������� ������)
-;;; "right" > ������� = (dy, -dx)  ������ (������ �� ����������� ������)
-;;; "to_point"/"inside"/"outside" > ������� �� cross-z (�/�� ����. �����)
-(defun geo:calc-angle ( ent ptFoot ptReal / tang dx dy cross mode nx ny ang )
+;;; Угол стрелки — определяет направление нормали
+;;; "left"  > нормаль = (-dy, dx)  ВСЕГДА (слева от направления кривой)
+;;; "right" > нормаль = (dy, -dx)  ВСЕГДА (справа от направления кривой)
+;;; "inside"/"outside" > нормаль с учётом CW/CCW обхода контура
+;;; [v3.4] Для inside/outside определяем направление обхода.
+;;;   CCW: внутрь = (dy,-dx), наружу = (-dy,dx)
+;;;   CW:  внутрь = (-dy,dx), наружу = (dy,-dx)  (инверсия)
+(defun geo:calc-angle ( ent ptFoot ptReal / tang dx dy cross mode ccw nx ny ang )
   (setq tang (geo:get-tangent ent ptFoot) dx (car tang) dy (cadr tang))
   (setq mode (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
   (cond
-    ;; === ����������� ������ ===
-    ;; ����� �� ����������� ������: ������� = (-dy, dx) ������
+    ;; === РАЗОМКНУТЫЙ КОНТУР ===
+    ;; Слева от направления кривой: нормаль = (-dy, dx) ВСЕГДА
     ((= mode "left")
      (setq nx (- dy) ny dx))
-    ;; ������ �� ����������� ������: ������� = (dy, -dx) ������
+    ;; Справа от направления кривой: нормаль = (dy, -dx) ВСЕГДА
     ((= mode "right")
      (setq nx dy ny (- dx)))
-    ;; === ��������� ������ ===
-    ;; "inside" > ������� ������ ������ �� ����������� = (dy, -dx)
-    ;; ��� ������������ ������ CCW ��� ������ �������.
-    ;; ���� ����� ������� � Flip ��������� ����� geo:need-mirror.
+    ;; === ЗАМКНУТЫЙ КОНТУР ===
+    ;; [v3.4] Определяем направление обхода для корректного inside/outside
+    ;; "inside" CCW: нормаль вправо (dy,-dx) = внутрь
+    ;; "inside" CW:  нормаль влево (-dy,dx) = внутрь
     ((= mode "inside")
-     (setq nx dy ny (- dx)))
-    ;; "outside" > ������� ������ ����� �� ����������� = (-dy, dx)
-    ;; ��� CCW ��� ������. ���� ����� ������ � Flip.
+     (setq ccw (geo:is-ccw ent))
+     (if ccw
+       (setq nx dy ny (- dx))       ; CCW: вправо = внутрь
+       (setq nx (- dy) ny dx)))     ; CW:  влево = внутрь
+    ;; "outside" CCW: нормаль влево (-dy,dx) = наружу
+    ;; "outside" CW:  нормаль вправо (dy,-dx) = наружу
     ((= mode "outside")
-     (setq nx (- dy) ny dx))
-    ;; === � ����� / �� ��������� ===
-    ;; ������� � ������� ����������� ����� (�� cross-z)
+     (setq ccw (geo:is-ccw ent))
+     (if ccw
+       (setq nx (- dy) ny dx)       ; CCW: влево = наружу
+       (setq nx dy ny (- dx))))     ; CW:  вправо = наружу
+    ;; === К ТОЧКЕ / ПО УМОЛЧАНИЮ ===
+    ;; Нормаль в сторону фактической точки (по cross-z)
     (T
      (setq cross (geo:cross-z ent ptFoot ptReal))
      (if (> cross 0) (setq nx (- dy) ny dx) (setq nx dy ny (- dx)))))
@@ -269,10 +348,10 @@
   ang)
 
 ;;; ================================================================
-;;; ������� �����
-;;; ���� *geo:blk-scale* > 0 > ���������� ��� ��������.
-;;; ���� = 0 > ���������� DIMSCALE (����������� ������).
-;;; DIMSCALE = ���������� ����������� ��������� ������.
+;;; МАСШТАБ БЛОКА
+;;; Если *geo:blk-scale* > 0 > используем его напрямую.
+;;; Если = 0 > используем DIMSCALE (стандартный способ).
+;;; DIMSCALE = масштабный коэффициент размерных стилей.
 ;;; ================================================================
 (defun geo:get-block-scale ( / ds )
   (cond
@@ -284,12 +363,12 @@
 )
 
 ;;; ================================================================
-;;; ENTSEL > ������
+;;; ENTSEL > ФИЛЬТР
 ;;; ================================================================
 (defun geo:build-filter-from-sample ( promptMsg / sel ent ed etyp elay ecol filter info )
   (setq sel (entsel promptMsg))
   (if (null sel)
-    (progn (princ "\n������ �� �������.") nil)
+    (progn (princ "\nНичего не выбрано.") nil)
     (progn
       (setq ent  (car sel)
             ed   (entget ent)
@@ -299,11 +378,11 @@
       (setq filter (list (cons 0 etyp) (cons 8 elay)))
       (if (and ecol (/= ecol 0))
         (setq filter (append filter (list (cons 62 ecol)))))
-      (setq info (strcat "���: " etyp "  ����: " elay
+      (setq info (strcat "Тип: " etyp "  Слой: " elay
                          (if (and ecol (/= ecol 0))
-                           (strcat "  ����: " (itoa ecol))
-                           "  ����: ByLayer")))
-      (princ (strcat "\n������: " info))
+                           (strcat "  Цвет: " (itoa ecol))
+                           "  Цвет: ByLayer")))
+      (princ (strcat "\nФильтр: " info))
       (list filter info)
     )
   )
@@ -317,7 +396,7 @@
     (repeat (sslength ss) (setq lst (append lst (list (ssname ss i))) i (1+ i))) lst) nil))
 
 ;;; ================================================================
-;;; ������� ��������� ���������� (image_button)
+;;; ЗАЛИВКА ЦВЕТОВОГО ИНДИКАТОРА (image_button)
 ;;; ================================================================
 (defun geo:fill-color-tile ( tileKey aciColor / w h )
   (setq w (dimx_tile tileKey) h (dimy_tile tileKey))
@@ -327,8 +406,8 @@
 )
 
 ;;; ================================================================
-;;; ������� �����
-;;; [v3.0] ������� = DIMSCALE ��� ������ ����
+;;; ВСТАВКА БЛОКА
+;;; [v3.0] Масштаб = DIMSCALE или ручной ввод
 ;;; ================================================================
 (defun geo:insert-arrow ( ent ptFoot ptReal distStr rawValue layName
                           / mSpace blkObj rotAngle scale atts att tag
@@ -339,12 +418,12 @@
   (setq blkObj (vla-InsertBlock mSpace (vlax-3d-point (geo:flatten ptFoot))
                  "Geo_Arrow" scale scale scale rotAngle))
   (vla-put-Layer blkObj layName)
-  ;; ��������� WCS-������� ��� ������ DISPLAY
-  ;; ���������� rotAngle �������: ����� ������ �� ����������� ������� �� 4?scale
-  ;; ��� Y ����� ��� rotAngle: ����������� (cos(rot+?/2), sin(rot+?/2)) = (-sin(rot), cos(rot))
+  ;; Вычисляем WCS-позицию для текста DISPLAY
+  ;; Используем rotAngle стрелки: текст смещён по направлению стрелки на 4?scale
+  ;; Ось Y блока при rotAngle: направление (cos(rot+?/2), sin(rot+?/2)) = (-sin(rot), cos(rot))
   (setq cosA (cos rotAngle) sinA (sin rotAngle))
-  ;; Offset � ����������� ����� DISPLAY: ~(4.5, 1.5) > � WCS ��� ��������:
-  ;; xWCS = 4.5*cos - 1.5*sin, yWCS = 4.5*sin + 1.5*cos (�� ? scale)
+  ;; Offset в определении блока DISPLAY: ~(4.5, 1.5) > в WCS при повороте:
+  ;; xWCS = 4.5*cos - 1.5*sin, yWCS = 4.5*sin + 1.5*cos (всё ? scale)
   (setq offX (* scale (- (* 4.5 cosA) (* 1.5 sinA)))
         offY (* scale (+ (* 4.5 sinA) (* 1.5 cosA))))
   (setq txtPt (vlax-3d-point
@@ -356,7 +435,7 @@
         (cond
           ((= tag "VALUE")
            (vla-put-TextString att rawValue)
-           (vla-put-Rotation att 0.0))  ;; v3.4: VALUE ������ ��������������
+           (vla-put-Rotation att 0.0))  ;; v3.4: VALUE всегда горизонтальный
           ((= tag "DISPLAY")
            (vla-put-TextString att distStr)
            (vla-put-Rotation att 0.0)
@@ -364,69 +443,69 @@
            (vla-put-TextAlignmentPoint att txtPt)
            (if (tblsearch "STYLE" *geo:txtstyle*)
              (vla-put-StyleName att *geo:txtstyle*)))))))
-  ;; ��������� ������������ ���������, ���� �����
+  ;; Применяем динамическое отражение, если нужно
   (geo:mirror-block-if-needed blkObj ent ptFoot ptReal)
   blkObj)
 
 ;;; ================================================================
-;;; DCL v3.0 � image_button � �������� �����, ������/�����
+;;; DCL v3.0 — image_button с заливкой цвета, Хорошо/Плохо
 ;;; ================================================================
 (defun geo:write-dcl ( / fn f )
   (setq fn (strcat (getvar "TEMPPREFIX") "GeoOffset.dcl"))
   (setq f (open fn "w"))
 
   (write-line "GeoOffset : dialog {" f)
-  (write-line "  label = \"GeoOffset v2.9\";" f)
+  (write-line "  label = \"GeoOffset v3.4\";" f)
 
-  ;; ========== ������� �����: 2 ������� ==========
+  ;; ========== ВЕРХНЯЯ ЧАСТЬ: 2 КОЛОНКИ ==========
   (write-line "  : row {" f)
 
-  ;; ---------- ����� ������� ----------
+  ;; ---------- ЛЕВАЯ КОЛОНКА ----------
   (write-line "    : column {" f)
   (write-line "      width = 36;" f)
 
-  ;; < ������� (��. �������) >
+  ;; < Допуски (ед. чертежа) >
   (write-line "      : boxed_column {" f)
-  (write-line "        label = \"������� (��. �������)\";" f)
-  ;; � �����
+  (write-line "        label = \"Допуски (ед. чертежа)\";" f)
+  ;; В плане
   (write-line "        : row {" f)
-  (write-line "          : toggle { label = \"� �����:\"; key = \"tol_plan_on\"; width = 14; }" f)
+  (write-line "          : toggle { label = \"В плане:\"; key = \"tol_plan_on\"; width = 14; }" f)
   (write-line "          : edit_box { key = \"tol_plan\"; edit_width = 8; fixed_width = true; }" f)
   (write-line "        }" f)
-  ;; �� ������
+  ;; По высоте
   (write-line "        : row {" f)
-  (write-line "          : toggle { label = \"�� ������:\"; key = \"tol_elev_on\"; width = 14; }" f)
+  (write-line "          : toggle { label = \"По высоте:\"; key = \"tol_elev_on\"; width = 14; }" f)
   (write-line "          : edit_box { key = \"tol_elev_lo\"; edit_width = 5; fixed_width = true; }" f)
   (write-line "          : text { label = \"-\"; width = 1; }" f)
   (write-line "          : edit_box { key = \"tol_elev_hi\"; edit_width = 5; fixed_width = true; }" f)
   (write-line "        }" f)
-  ;; �����: ������� ������, image_button �����
+  ;; Цвета: надписи сверху, image_button снизу
   (write-line "        : row {" f)
   (write-line "          : column {" f)
-  (write-line "            : text { label = \"������\"; alignment = centered; }" f)
+  (write-line "            : text { label = \"Хорошо\"; alignment = centered; }" f)
   (write-line "            : image_button { key = \"img_col_ok\"; width = 6; height = 1.5; fixed_width = true; fixed_height = true; color = 3; }" f)
   (write-line "          }" f)
   (write-line "          : spacer { width = 2; }" f)
   (write-line "          : column {" f)
-  (write-line "            : text { label = \"�����\"; alignment = centered; }" f)
+  (write-line "            : text { label = \"Плохо\"; alignment = centered; }" f)
   (write-line "            : image_button { key = \"img_col_fail\"; width = 6; height = 1.5; fixed_width = true; fixed_height = true; color = 1; }" f)
   (write-line "          }" f)
   (write-line "        }" f)
   (write-line "      }" f)
 
-  ;; < ��������� ������� >
+  ;; < Проектная отметка >
   (write-line "      : boxed_column {" f)
-  (write-line "        label = \"��������� �������\";" f)
+  (write-line "        label = \"Проектная отметка\";" f)
   (write-line "        : row {" f)
   (write-line "          : edit_box { key = \"elev_val\"; edit_width = 10; }" f)
   (write-line "          : spacer { width = 1; }" f)
-  (write-line "          : toggle { label = \"�� �������\"; key = \"elev_from_obj\"; }" f)
+  (write-line "          : toggle { label = \"Из объекта\"; key = \"elev_from_obj\"; }" f)
   (write-line "        }" f)
   (write-line "      }" f)
 
-  ;; < ��������� >
+  ;; < Параметры >
   (write-line "      : boxed_column {" f)
-  (write-line "        label = \"���������\";" f)
+  (write-line "        label = \"Параметры\";" f)
   (write-line "        : row {" f)
   (write-line "          : text { label = \"k=\"; width = 3; }" f)
   (write-line "          : edit_box { key = \"coeff\"; edit_width = 6; }" f)
@@ -434,34 +513,34 @@
   (write-line "          : popup_list { key = \"prefix\"; width = 5; }" f)
   (write-line "        }" f)
   (write-line "        : row {" f)
-  (write-line "          : text { label = \"������� ����� (0=DIMSCALE):\"; width = 26; }" f)
+  (write-line "          : text { label = \"Масштаб блока (0=DIMSCALE):\"; width = 26; }" f)
   (write-line "          : edit_box { key = \"blk_scale\"; edit_width = 8; fixed_width = true; }" f)
   (write-line "        }" f)
   (write-line "      }" f)
 
   (write-line "    }" f)
 
-  ;; ---------- ������ ������� ----------
+  ;; ---------- ПРАВАЯ КОЛОНКА ----------
   (write-line "    : column {" f)
   (write-line "      width = 24;" f)
 
-  ;; < ����� >
+  ;; < Текст >
   (write-line "      : boxed_column {" f)
-  (write-line "        label = \"�����\";" f)
+  (write-line "        label = \"Текст\";" f)
   (write-line "        : row {" f)
-  (write-line "          : text { label = \"������:\"; width = 8; }" f)
+  (write-line "          : text { label = \"Высота:\"; width = 8; }" f)
   (write-line "          : edit_box { key = \"txt_height\"; edit_width = 6; }" f)
   (write-line "        }" f)
   (write-line "        : popup_list { key = \"txt_style\"; width = 18; }" f)
   (write-line "      }" f)
 
-  ;; < ���� >
+  ;; < Слой >
   (write-line "      : boxed_column {" f)
-  (write-line "        label = \"����\";" f)
+  (write-line "        label = \"Слой\";" f)
   (write-line "        : popup_list { key = \"layer_sel\"; width = 18; }" f)
-  (write-line "        : edit_box { label = \"�����:\"; key = \"layer_new\"; edit_width = 14; }" f)
+  (write-line "        : edit_box { label = \"Новый:\"; key = \"layer_new\"; edit_width = 14; }" f)
   (write-line "        : row {" f)
-  (write-line "          : text { label = \"����:\"; width = 6; }" f)
+  (write-line "          : text { label = \"Цвет:\"; width = 6; }" f)
   (write-line "          : image_button { key = \"img_color\"; width = 6; height = 1.5; fixed_width = true; fixed_height = true; color = 0; }" f)
   (write-line "        }" f)
   (write-line "      }" f)
@@ -469,35 +548,35 @@
   (write-line "    }" f)
   (write-line "  }" f)
 
-  ;; ========== ������ ����� ==========
+  ;; ========== НИЖНЯЯ ЧАСТЬ ==========
 
-  ;; < ��������� ������� >
+  ;; < Положение стрелки >
   (write-line "  : boxed_column {" f)
-  (write-line "    label = \"��������� �������\";" f)
+  (write-line "    label = \"Положение стрелки\";" f)
   (write-line "    : row {" f)
   (write-line "      : column {" f)
-  (write-line "        : text { label = \"��������� ������:\"; }" f)
+  (write-line "        : text { label = \"Замкнутый контур:\"; }" f)
   (write-line "        : popup_list { key = \"side_closed\"; width = 18; }" f)
   (write-line "      }" f)
   (write-line "      : column {" f)
-  (write-line "        : text { label = \"����������� ������:\"; }" f)
+  (write-line "        : text { label = \"Разомкнутый контур:\"; }" f)
   (write-line "        : popup_list { key = \"side_open\"; width = 18; }" f)
   (write-line "      }" f)
   (write-line "    }" f)
   (write-line "  }" f)
 
-  ;; < ����� >
+  ;; < Опции >
   (write-line "  : boxed_column {" f)
-  (write-line "    label = \"�����\";" f)
-  (write-line "    : toggle { label = \"���� ������� ����� ������\"; key = \"opt_onepoint\"; }" f)
-  (write-line "    : toggle { label = \"�������� �������\";         key = \"opt_short\"; }" f)
-  (write-line "    : toggle { label = \"������� �� �������\";       key = \"opt_leader\"; }" f)
-  (write-line "    : toggle { label = \"������������� ��������� ��������\"; key = \"opt_fixpos\"; }" f)
+  (write-line "    label = \"Опции\";" f)
+  (write-line "    : toggle { label = \"Углы снимали одной точкой\"; key = \"opt_onepoint\"; }" f)
+  (write-line "    : toggle { label = \"Короткие стрелки\";         key = \"opt_short\"; }" f)
+  (write-line "    : toggle { label = \"Отметка на выноске\";       key = \"opt_leader\"; }" f)
+  (write-line "    : toggle { label = \"Фиксированное положение атрибута\"; key = \"opt_fixpos\"; }" f)
   (write-line "  }" f)
 
-  ;; ������
+  ;; Кнопки
   (write-line "  : row {" f)
-  (write-line "    : button { label = \"�������\"; key = \"btn_help\"; width = 12; fixed_width = true; }" f)
+  (write-line "    : button { label = \"Справка\"; key = \"btn_help\"; width = 12; fixed_width = true; }" f)
   (write-line "    : spacer { width = 2; }" f)
   (write-line "    ok_cancel;" f)
   (write-line "  }" f)
@@ -508,7 +587,7 @@
 )
 
 ;;; ================================================================
-;;; ������� �������
+;;; ГЛАВНАЯ ФУНКЦИЯ
 ;;; ================================================================
 (defun c:GeoOffset ( / dcl_fn dcl_id what_next
                        ssProj ssFact projEnts factEnts
@@ -521,8 +600,8 @@
   (vl-load-com)
   (geo:create-arrow-block)
 
-  ;; === �������������� ��������� ���� ���������� ===
-  ;; ����������� ���������� ��� ����� ���������� ������
+  ;; === ПРИНУДИТЕЛЬНАЯ ВАЛИДАЦИЯ ВСЕХ ПЕРЕМЕННЫХ ===
+  ;; Гарантирует правильный тип после обновления версии
   (if (not (numberp *geo:coeff*))       (setq *geo:coeff*       1000.0))
   (if (not (numberp *geo:precision*))   (setq *geo:precision*   0))
   (if (not (numberp *geo:txtht*))       (setq *geo:txtht*       1.8))
@@ -550,19 +629,19 @@
 
   (setq *geo:styles-list* (geo:get-text-styles)
         *geo:layers-list* (geo:get-layers))
-  (setq *geo:layers-plus* (append *geo:layers-list* (list ">> ������� ����� <<")))
+  (setq *geo:layers-plus* (append *geo:layers-list* (list ">> Создать новый <<")))
   (setq lastLayIdx (1- (length *geo:layers-plus*)))
 
   (setq dcl_fn (geo:write-dcl)
         dcl_id (load_dialog dcl_fn)
         ssProj nil ssFact nil what_next 5)
 
-  ;; ======== ���� ������� ========
+  ;; ======== ЦИКЛ ДИАЛОГА ========
   (while (>= what_next 2)
     (if (not (new_dialog "GeoOffset" dcl_id))
-      (progn (princ "\n[GeoOffset] ������ �������� �������.") (setq what_next -1))
+      (progn (princ "\n[GeoOffset] Ошибка загрузки диалога.") (setq what_next -1))
       (progn
-        ;; --- ���������� ������� ---
+        ;; --- Заполнение списков ---
         (start_list "txt_style") (mapcar 'add_list *geo:styles-list*) (end_list)
         (start_list "layer_sel") (mapcar 'add_list *geo:layers-plus*) (end_list)
 
@@ -579,20 +658,20 @@
               (T                    (set_tile "prefix" "2")))
 
         (start_list "side_closed")
-        (mapcar 'add_list '("� �����" "������" "�������"))
+        (mapcar 'add_list '("К точке" "Внутри" "Снаружи"))
         (end_list)
         (cond ((= *geo:side-closed* "to_point") (set_tile "side_closed" "0"))
               ((= *geo:side-closed* "inside")   (set_tile "side_closed" "1"))
               ((= *geo:side-closed* "outside")  (set_tile "side_closed" "2")))
 
         (start_list "side_open")
-        (mapcar 'add_list '("� �����" "�����" "������"))
+        (mapcar 'add_list '("К точке" "Слева" "Справа"))
         (end_list)
         (cond ((= *geo:side-open* "to_point") (set_tile "side_open" "0"))
               ((= *geo:side-open* "left")     (set_tile "side_open" "1"))
               ((= *geo:side-open* "right")    (set_tile "side_open" "2")))
 
-        ;; --- ������� �������� ---
+        ;; --- Текущие значения ---
         (set_tile "tol_plan_on"  *geo:tol-plan-on*)
         (set_tile "tol_plan"     (geo:safe-rtos *geo:tol-plan* 2 4))
         (set_tile "tol_elev_on"  *geo:tol-elev-on*)
@@ -604,13 +683,13 @@
         (set_tile "blk_scale"    (geo:safe-rtos *geo:blk-scale* 2 1))
         (set_tile "txt_height"   (geo:safe-rtos *geo:txtht* 2 1))
 
-        ;; ����� ������ (vl-position ����� ������� nil)
+        ;; Стиль текста (vl-position может вернуть nil)
         (setq tmpIdx (vl-position *geo:txtstyle* *geo:styles-list*))
         (if tmpIdx
           (set_tile "txt_style" (itoa tmpIdx))
           (set_tile "txt_style" "0"))
 
-        ;; ���� (vl-position ����� ������� nil ���� ���� ���)
+        ;; Слой (vl-position может вернуть nil если слоя нет)
         (setq selLayIdx (vl-position *geo:layer* *geo:layers-list*))
         (if selLayIdx
           (progn
@@ -621,17 +700,17 @@
             (set_tile "layer_new" *geo:layer*)
             (mode_tile "layer_new" 0)))
 
-        ;; ������
+        ;; Тогглы
         (set_tile "opt_onepoint" *geo:opt-onepoint*)
         (set_tile "opt_short"    *geo:opt-short*)
         (set_tile "opt_leader"   *geo:opt-leader*)
         (set_tile "opt_fixpos"   *geo:opt-fixpos*)
 
-        ;; mode_tile: ��������� �������
+        ;; mode_tile: проектная отметка
         (if (= *geo:elev-mode* "object")
           (mode_tile "elev_val" 1) (mode_tile "elev_val" 0))
 
-        ;; --- ������� �������� ����������� ---
+        ;; --- ЗАЛИВКА ЦВЕТОВЫХ ИНДИКАТОРОВ ---
         (geo:fill-color-tile "img_col_ok"   *geo:color-ok*)
         (geo:fill-color-tile "img_col_fail" *geo:color-fail*)
         (geo:fill-color-tile "img_color"    *geo:color*)
@@ -645,33 +724,33 @@
                   "  (mode_tile \"layer_new\" 0)"
                   "  (mode_tile \"layer_new\" 1))"))
 
-        ;; ���� ���� � image_button, nil-safe
+        ;; Цвет слоя — image_button, nil-safe
         (action_tile "img_color"
           "(progn (setq *geo:tmp-col* (acad_colordlg (fix *geo:color*))) (if *geo:tmp-col* (progn (setq *geo:color* *geo:tmp-col*) (geo:fill-color-tile \"img_color\" *geo:color*))))")
 
-        ;; ���� ������� � image_button, nil-safe
+        ;; Цвет «Хорошо» — image_button, nil-safe
         (action_tile "img_col_ok"
           "(progn (setq *geo:tmp-col* (acad_colordlg (fix *geo:color-ok*))) (if *geo:tmp-col* (progn (setq *geo:color-ok* *geo:tmp-col*) (geo:fill-color-tile \"img_col_ok\" *geo:color-ok*))))")
 
-        ;; ���� ������ � image_button, nil-safe
+        ;; Цвет «Плохо» — image_button, nil-safe
         (action_tile "img_col_fail"
           "(progn (setq *geo:tmp-col* (acad_colordlg (fix *geo:color-fail*))) (if *geo:tmp-col* (progn (setq *geo:color-fail* *geo:tmp-col*) (geo:fill-color-tile \"img_col_fail\" *geo:color-fail*))))")
 
-        ;; �������
+        ;; Справка
         (action_tile "btn_help"
           (strcat
             "(alert \""
-            "GeoOffset v2.9\\n\\n"
-            "������� ������:\\n"
-            "1. ��������� ���������\\n"
-            "2. ������� Ok\\n"
-            "3. ������� ������� ���������� �������\\n"
-            "4. �������� ��� ��������� �������\\n"
-            "5. ������� ������� ����������� �����\\n"
-            "6. �������� ��� ����������� �����\\n\\n"
-            "������� �����: 0=DIMSCALE, ��� �������.\\n"
-            "������ � ��. ������� (�� ��������� �� k).\\n"
-            "������ = � �������, ����� = ����������.\""
+            "GeoOffset v3.4\\n\\n"
+            "Порядок работы:\\n"
+            "1. Настройте параметры\\n"
+            "2. Нажмите Ok\\n"
+            "3. Укажите образец проектного объекта\\n"
+            "4. Выберите все проектные объекты\\n"
+            "5. Укажите образец фактической точки\\n"
+            "6. Выберите все фактические точки\\n\\n"
+            "Масштаб блока: 0=DIMSCALE, или вручную.\\n"
+            "Допуск в ед. чертежа (ДО умножения на k).\\n"
+            "Хорошо = в допуске, Плохо = превышение.\""
             ")"))
 
         ;; OK
@@ -707,58 +786,58 @@
         (action_tile "cancel" "(done_dialog 0)")
 
         (setq what_next (start_dialog))
-        (if (= what_next 0) (princ "\n[GeoOffset] ��������."))
+        (if (= what_next 0) (princ "\n[GeoOffset] Отменено."))
       )
     )
   )
   (unload_dialog dcl_id)
 
   ;; ================================================================
-  ;; ����� OK
+  ;; ПОСЛЕ OK
   ;; ================================================================
   (setq doProcess T)
 
   (if (and (= what_next 1) doProcess)
     (progn
-      (princ "\n\n======= ��������� ������� =======")
-      (setq fResult (geo:build-filter-from-sample "\n������� ������� ���������� �������: "))
+      (princ "\n\n======= ПРОЕКТНЫЕ ОБЪЕКТЫ =======")
+      (setq fResult (geo:build-filter-from-sample "\nУкажите ОБРАЗЕЦ проектного объекта: "))
       (if (null fResult)
-        (progn (princ "\n[GeoOffset] ������� �� ������. ������.") (setq doProcess nil)))))
+        (progn (princ "\n[GeoOffset] Образец не выбран. Отмена.") (setq doProcess nil)))))
 
   (if (and (= what_next 1) doProcess)
     (progn
       (setq *geo:proj-filter* (car fResult) *geo:proj-info* (cadr fResult))
-      (princ (strcat "\n�������� ��������� ������� [" *geo:proj-info* "]: "))
+      (princ (strcat "\nВыберите проектные объекты [" *geo:proj-info* "]: "))
       (setq ssProj (ssget "_:L" *geo:proj-filter*))
       (if (and (null ssProj) (> (length *geo:proj-filter*) 2))
-        (progn (princ "\n������ ��� �����...")
+        (progn (princ "\nПробую без цвета...")
           (setq ssProj (ssget "_:L" (list (car *geo:proj-filter*) (cadr *geo:proj-filter*))))))
       (if (null ssProj)
-        (progn (princ "\n[GeoOffset] ��������� �� �������.") (setq doProcess nil))
-        (princ (strcat "\n������� ���������: " (itoa (sslength ssProj)))))))
+        (progn (princ "\n[GeoOffset] Проектные не выбраны.") (setq doProcess nil))
+        (princ (strcat "\nВыбрано проектных: " (itoa (sslength ssProj)))))))
 
   (if (and (= what_next 1) doProcess)
     (progn
-      (princ "\n\n======= ����������� ����� =======")
-      (setq fResult (geo:build-filter-from-sample "\n������� ������� ����������� �����: "))
+      (princ "\n\n======= ФАКТИЧЕСКИЕ ТОЧКИ =======")
+      (setq fResult (geo:build-filter-from-sample "\nУкажите ОБРАЗЕЦ фактической точки: "))
       (if (null fResult)
-        (progn (princ "\n[GeoOffset] ������� �� ������. ������.") (setq doProcess nil)))))
+        (progn (princ "\n[GeoOffset] Образец не выбран. Отмена.") (setq doProcess nil)))))
 
   (if (and (= what_next 1) doProcess)
     (progn
       (setq *geo:fact-filter* (car fResult) *geo:fact-info* (cadr fResult))
-      (princ (strcat "\n�������� ����������� ����� [" *geo:fact-info* "]: "))
+      (princ (strcat "\nВыберите фактические точки [" *geo:fact-info* "]: "))
       (setq ssFact (ssget "_:L" *geo:fact-filter*))
       (if (and (null ssFact) (> (length *geo:fact-filter*) 2))
-        (progn (princ "\n������ ��� �����...")
+        (progn (princ "\nПробую без цвета...")
           (setq ssFact (ssget "_:L" (list (car *geo:fact-filter*) (cadr *geo:fact-filter*))))))
       (if (null ssFact)
-        (progn (princ "\n[GeoOffset] ����� �� �������.") (setq doProcess nil))
-        (princ (strcat "\n������� �����������: " (itoa (sslength ssFact)))))))
+        (progn (princ "\n[GeoOffset] Точки не выбраны.") (setq doProcess nil))
+        (princ (strcat "\nВыбрано фактических: " (itoa (sslength ssFact)))))))
 
   ;; ================================================================
-  ;; ���������
-  ;; [FIX v3.0] ������: bestDist ������������ � tol-plan �� * k
+  ;; ОБРАБОТКА
+  ;; [FIX v3.0] Допуск: bestDist сравнивается с tol-plan ДО * k
   ;; ================================================================
   (if (and (= what_next 1) doProcess ssProj ssFact)
     (progn
@@ -768,17 +847,17 @@
             totalPts  (length factEnts)
             errCount  0 okCount 0)
       (if (or (null *geo:coeff*) (<= *geo:coeff* 0))
-        (progn (princ "\n[GeoOffset] k<=0, ���������� k=1.0")
+        (progn (princ "\n[GeoOffset] k<=0, установлен k=1.0")
                (setq *geo:coeff* 1.0)))
       (setq old-osmode (getvar "OSMODE"))
       (setvar "OSMODE" 0)
       (vla-StartUndoMark (vla-get-ActiveDocument (vlax-get-acad-object)))
 
-      (princ (strcat "\n\n  ������� �����: " (rtos (geo:get-block-scale) 2 2)
+      (princ (strcat "\n\n  Масштаб блока: " (rtos (geo:get-block-scale) 2 2)
                      " (DIMSCALE=" (rtos (getvar "DIMSCALE") 2 1) ")"))
       (princ (strcat "\n  k= " (rtos *geo:coeff* 2 0)))
-      (princ (strcat "\n  ������: " (rtos *geo:tol-plan* 2 4)
-                     " ��. ������� (��������� �� k)\n"))
+      (princ (strcat "\n  Допуск: " (rtos *geo:tol-plan* 2 4)
+                     " ед. чертежа (сравнение ДО k)\n"))
 
       (setq i 0)
       (foreach factEnt factEnts
@@ -792,7 +871,7 @@
                 (setq bestEnt  (car result)
                       bestFoot (geo:flatten (cadr result))
                       bestDist (caddr result))
-                ;; dist = �������� � �������� �������� (��� �����������)
+                ;; dist = значение в выходных единицах (для отображения)
                 (setq dist (* bestDist *geo:coeff*))
                 (setq sign (geo:calc-sign bestEnt bestFoot pt))
                 (setq rawVal (rtos dist 2 *geo:precision*))
@@ -802,16 +881,16 @@
                      (setq distStr rawVal)
                      (setq distStr (strcat *geo:prefix* rawVal))))
                   (T (setq distStr (strcat sign rawVal))))
-                ;; ������� �����
+                ;; Вставка блока
                 (setq blkObj (geo:insert-arrow bestEnt bestFoot pt distStr rawVal *geo:layer*))
-                ;; [FIX v3.0] ����: ������ ������������ �� ��������� �� k
-                ;; bestDist � ���������� � �������� �������
-                ;; *geo:tol-plan* � ������ � �������� �������
-                ;; ������: ����� � �, bestDist=0.03 �, ������=0.05 � > 0.03 ? 0.05 > ������
+                ;; [FIX v3.0] Цвет: допуск сравнивается ДО умножения на k
+                ;; bestDist — расстояние в единицах чертежа
+                ;; *geo:tol-plan* — допуск в единицах чертежа
+                ;; Пример: чертёж в м, bestDist=0.03 м, допуск=0.05 м > 0.03 ? 0.05 > Хорошо
                 (if (= *geo:tol-plan-on* "1")
                   (if (<= bestDist *geo:tol-plan*)
-                    (vla-put-Color blkObj (fix *geo:color-ok*))     ; ������
-                    (vla-put-Color blkObj (fix *geo:color-fail*)))  ; �����
+                    (vla-put-Color blkObj (fix *geo:color-ok*))     ; Хорошо
+                    (vla-put-Color blkObj (fix *geo:color-fail*)))  ; Плохо
                   (vla-put-Color blkObj (fix *geo:color*)))
                 (setq okCount (1+ okCount))
                 (princ (strcat "\n  [" (itoa (1+ i)) "/" (itoa totalPts) "] "
@@ -820,20 +899,20 @@
                                  (if (<= bestDist *geo:tol-plan*) " OK" " !!!")
                                  ""))))
               (progn (setq errCount (1+ errCount))
-                (princ (strcat "\n  [" (itoa (1+ i)) "] ������"))))))
+                (princ (strcat "\n  [" (itoa (1+ i)) "] ОШИБКА"))))))
         (setq i (1+ i)))
 
       (vla-EndUndoMark (vla-get-ActiveDocument (vlax-get-acad-object)))
       (setvar "OSMODE" old-osmode)
 
       (princ "\n\n========================================")
-      (princ (strcat "\n  ����������: " (itoa okCount)))
-      (if (> errCount 0) (princ (strcat "\n  ������: " (itoa errCount))))
+      (princ (strcat "\n  Обработано: " (itoa okCount)))
+      (if (> errCount 0) (princ (strcat "\n  Ошибок: " (itoa errCount))))
       (princ "\n========================================")
     )
   )
   (princ)
 )
 
-(princ "\n[GeoOffset v3.4] ��������. �������: GeoOffset")
+(princ "\n[GeoOffset v3.4] Загружен. Команда: GeoOffset")
 (princ)
