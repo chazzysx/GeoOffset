@@ -9,6 +9,9 @@
 ;;;         FIX: inside/outside для ЛЮБЫХ замкнутых контуров
 ;;;         (определение направления обхода CW/CCW через
 ;;;          знаковую площадь — ранее работало только для круга)
+;;;         Отдельная логика для CIRCLE: направление по
+;;;          радиальному вектору (центр↔точка), inside/outside
+;;;          по сравнению distance с radius
 ;;; v3.0 — DCL: image_button + fill_image для цветов Хорошо/Плохо
 ;;;         FIX: допуск сравнивается ДО умножения на k
 ;;;         Масштаб блока: DIMSCALE или вручную
@@ -160,6 +163,60 @@
     (T nil)))
 
 ;;; ================================================================
+;;; ГЕОМЕТРИЯ КРУГА
+;;; ================================================================
+;;; Для круга не нужна касательная и cross-z.
+;;; Внутри/снаружи определяется сравнением distance(точка, центр) с радиусом.
+;;; Направление стрелки — радиальный вектор от центра через ptFoot.
+
+;;; Получить центр круга (2D)
+(defun geo:circle-center ( ent / ed )
+  (setq ed (entget ent))
+  (geo:flatten (cdr (assoc 10 ed))))
+
+;;; Получить радиус круга
+(defun geo:circle-radius ( ent / ed )
+  (setq ed (entget ent))
+  (cdr (assoc 40 ed)))
+
+;;; Проверка: это круг?
+(defun geo:circle-p ( ent )
+  (= (cdr (assoc 0 (entget ent))) "CIRCLE"))
+
+;;; Точка внутри круга? T = внутри или на круге, nil = снаружи
+(defun geo:point-inside-circle ( ent pt / cen rad )
+  (setq cen (geo:circle-center ent)
+        rad (geo:circle-radius ent))
+  (<= (distance (geo:flatten pt) cen) rad))
+
+;;; Радиальный угол стрелки для круга
+;;; inside:   стрелка от ptFoot к центру (внутрь)
+;;; outside:  стрелка от ptFoot от центра (наружу)
+;;; to_point: стрелка от ptFoot к ptReal
+;;; Возвращает угол в радианах
+(defun geo:circle-arrow-angle ( ent ptFoot ptReal mode
+                                / cen dx dy len ang )
+  (setq cen (geo:circle-center ent))
+  (cond
+    ;; Внутрь: вектор от ptFoot к центру
+    ((= mode "inside")
+     (setq dx (- (car cen) (car ptFoot))
+           dy (- (cadr cen) (cadr ptFoot))))
+    ;; Наружу: вектор от центра к ptFoot
+    ((= mode "outside")
+     (setq dx (- (car ptFoot) (car cen))
+           dy (- (cadr ptFoot) (cadr cen))))
+    ;; К точке: вектор от ptFoot к ptReal
+    (T
+     (setq dx (- (car ptReal) (car ptFoot))
+           dy (- (cadr ptReal) (cadr ptFoot)))))
+  ;; Нормализация (защита от нулевого вектора)
+  (setq len (sqrt (+ (* dx dx) (* dy dy))))
+  (if (< len 1e-10)
+    0.0
+    (atan dy dx)))
+
+;;; ================================================================
 ;;; ОПРЕДЕЛЕНИЕ НАПРАВЛЕНИЯ ОБХОДА (CW/CCW)
 ;;; ================================================================
 ;;; Знаковая площадь (Shoelace formula):
@@ -223,17 +280,18 @@
 ;;; "left"  = стрелки СЛЕВА  > знак "+" если точка слева (cross>0), иначе "-"
 ;;; "right" = стрелки СПРАВА > знак "+" если точка справа (cross<0), иначе "-"
 (defun geo:calc-sign ( ent ptFoot ptReal / cross mode )
-  (setq cross (geo:cross-z ent ptFoot ptReal)
-        mode (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
+  (setq mode (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
   (cond
-    ((= mode "to_point") (if (> cross 0) "+" "-"))
     ;; inside/outside/left/right: знак всегда "+"
     ;; направление задаётся нормалью, Flip корректирует визуал
     ((= mode "inside")   "+")
     ((= mode "outside")  "+")
     ((= mode "left")     "+")
     ((= mode "right")    "+")
-    (T                   (if (> cross 0) "+" "-"))))
+    ;; К точке / по умолчанию
+    (T
+     (setq cross (geo:cross-z ent ptFoot ptReal))
+     (if (> cross 0) "+" "-"))))
 
 
 ;;; ================================================================
@@ -247,27 +305,37 @@
 ;;; [v3.4] Для inside/outside учитываем CW/CCW обход контура.
 ;;; Логика Flip: стрелка уже направлена нормалью внутрь/наружу.
 ;;; Если фактическая точка на противоположной стороне — Flip.
-(defun geo:need-mirror ( ent ptFoot ptReal / cross mode ccw )
-  (setq cross (geo:cross-z ent ptFoot ptReal)
-        mode  (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
+(defun geo:need-mirror ( ent ptFoot ptReal / cross mode ccw isInside )
+  (setq mode (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
   (cond
-    ;; --- Разомкнутый контур ---
+    ;; === КРУГ ===
+    ;; Для круга inside/outside определяется по расстоянию до центра.
+    ;; Стрелка уже направлена нужной нормалью (geo:circle-arrow-angle).
+    ;; Flip нужен если точка на противоположной стороне.
+    ((and (geo:circle-p ent) (member mode '("inside" "outside")))
+     (setq isInside (geo:point-inside-circle ent ptReal))
+     (cond
+       ;; inside: стрелка внутрь, точка снаружи > Flip
+       ((and (= mode "inside")  (not isInside)) T)
+       ;; outside: стрелка наружу, точка внутри > Flip
+       ((and (= mode "outside") isInside) T)
+       (T nil)))
+    ;; === РАЗОМКНУТЫЙ КОНТУР ===
     ;; Стрелки слева, а точка справа > Flip
-    ((and (= mode "left")  (< cross 0)) T)
+    ((and (= mode "left")  (progn (setq cross (geo:cross-z ent ptFoot ptReal)) (< cross 0))) T)
     ;; Стрелки справа, а точка слева > Flip
-    ((and (= mode "right") (> cross 0)) T)
-    ;; --- Замкнутый контур [v3.4] ---
-    ;; inside: нормаль направлена внутрь. Flip если точка снаружи.
-    ;; outside: нормаль направлена наружу. Flip если точка внутри.
-    ;; CCW: cross>0 = точка слева (снаружи), cross<0 = справа (внутри)
-    ;; CW:  cross>0 = точка слева (внутри), cross<0 = справа (снаружи)
+    ((and (= mode "right") (progn (if (null cross) (setq cross (geo:cross-z ent ptFoot ptReal))) (> cross 0))) T)
+    ;; === ЗАМКНУТЫЙ КОНТУР (не круг) [v3.4] ===
+    ;; inside/outside с учётом CW/CCW
     ((= mode "inside")
-     (setq ccw (geo:is-ccw ent))
+     (setq cross (geo:cross-z ent ptFoot ptReal)
+           ccw (geo:is-ccw ent))
      (if ccw
        (> cross 0)    ; CCW: точка снаружи (cross>0) > Flip
        (< cross 0)))  ; CW:  точка снаружи (cross<0) > Flip
     ((= mode "outside")
-     (setq ccw (geo:is-ccw ent))
+     (setq cross (geo:cross-z ent ptFoot ptReal)
+           ccw (geo:is-ccw ent))
      (if ccw
        (< cross 0)    ; CCW: точка внутри (cross<0) > Flip
        (> cross 0)))  ; CW:  точка внутри (cross>0) > Flip
@@ -313,39 +381,43 @@
 ;;;   CCW: внутрь = (dy,-dx), наружу = (-dy,dx)
 ;;;   CW:  внутрь = (-dy,dx), наружу = (dy,-dx)  (инверсия)
 (defun geo:calc-angle ( ent ptFoot ptReal / tang dx dy cross mode ccw nx ny ang )
-  (setq tang (geo:get-tangent ent ptFoot) dx (car tang) dy (cadr tang))
   (setq mode (if (geo:closed-p ent) *geo:side-closed* *geo:side-open*))
-  (cond
-    ;; === РАЗОМКНУТЫЙ КОНТУР ===
-    ;; Слева от направления кривой: нормаль = (-dy, dx) ВСЕГДА
-    ((= mode "left")
-     (setq nx (- dy) ny dx))
-    ;; Справа от направления кривой: нормаль = (dy, -dx) ВСЕГДА
-    ((= mode "right")
-     (setq nx dy ny (- dx)))
-    ;; === ЗАМКНУТЫЙ КОНТУР ===
-    ;; [v3.4] Определяем направление обхода для корректного inside/outside
-    ;; "inside" CCW: нормаль вправо (dy,-dx) = внутрь
-    ;; "inside" CW:  нормаль влево (-dy,dx) = внутрь
-    ((= mode "inside")
-     (setq ccw (geo:is-ccw ent))
-     (if ccw
-       (setq nx dy ny (- dx))       ; CCW: вправо = внутрь
-       (setq nx (- dy) ny dx)))     ; CW:  влево = внутрь
-    ;; "outside" CCW: нормаль влево (-dy,dx) = наружу
-    ;; "outside" CW:  нормаль вправо (dy,-dx) = наружу
-    ((= mode "outside")
-     (setq ccw (geo:is-ccw ent))
-     (if ccw
-       (setq nx (- dy) ny dx)       ; CCW: влево = наружу
-       (setq nx dy ny (- dx))))     ; CW:  вправо = наружу
-    ;; === К ТОЧКЕ / ПО УМОЛЧАНИЮ ===
-    ;; Нормаль в сторону фактической точки (по cross-z)
-    (T
-     (setq cross (geo:cross-z ent ptFoot ptReal))
-     (if (> cross 0) (setq nx (- dy) ny dx) (setq nx dy ny (- dx)))))
-  (setq ang (- (atan ny nx) (/ pi 2)))
-  ang)
+  ;; === КРУГ: отдельная логика ===
+  ;; Для круга угол вычисляется через радиальный вектор (центр↔ptFoot),
+  ;; а не через касательную + cross-z. Это гарантирует
+  ;; корректное направление внутрь/наружу независимо от обхода.
+  (if (geo:circle-p ent)
+    (geo:circle-arrow-angle ent ptFoot ptReal mode)
+    ;; === ОСТАЛЬНЫЕ ТИПЫ: касательная + нормаль ===
+    (progn
+      (setq tang (geo:get-tangent ent ptFoot) dx (car tang) dy (cadr tang))
+      (cond
+        ;; === РАЗОМКНУТЫЙ КОНТУР ===
+        ;; Слева от направления кривой: нормаль = (-dy, dx) ВСЕГДА
+        ((= mode "left")
+         (setq nx (- dy) ny dx))
+        ;; Справа от направления кривой: нормаль = (dy, -dx) ВСЕГДА
+        ((= mode "right")
+         (setq nx dy ny (- dx)))
+        ;; === ЗАМКНУТЫЙ КОНТУР (не круг) ===
+        ;; [v3.4] Определяем направление обхода для корректного inside/outside
+        ((= mode "inside")
+         (setq ccw (geo:is-ccw ent))
+         (if ccw
+           (setq nx dy ny (- dx))       ; CCW: вправо = внутрь
+           (setq nx (- dy) ny dx)))     ; CW:  влево = внутрь
+        ((= mode "outside")
+         (setq ccw (geo:is-ccw ent))
+         (if ccw
+           (setq nx (- dy) ny dx)       ; CCW: влево = наружу
+           (setq nx dy ny (- dx))))     ; CW:  вправо = наружу
+        ;; === К ТОЧКЕ / ПО УМОЛЧАНИЮ ===
+        ;; Нормаль в сторону фактической точки (по cross-z)
+        (T
+         (setq cross (geo:cross-z ent ptFoot ptReal))
+         (if (> cross 0) (setq nx (- dy) ny dx) (setq nx dy ny (- dx)))))
+      (setq ang (- (atan ny nx) (/ pi 2)))
+      ang)))
 
 ;;; ================================================================
 ;;; МАСШТАБ БЛОКА
