@@ -198,14 +198,16 @@
                                 / cen dx dy len ang )
   (setq cen (geo:circle-center ent))
   (cond
-    ;; Внутрь: вектор от ptFoot к центру
+    ;; Внутрь: вектор от центра к ptFoot (от центра наружу)
+    ;; [v3.4] Инвертировано относительно остальных замкнутых фигур
     ((= mode "inside")
-     (setq dx (- (car cen) (car ptFoot))
-           dy (- (cadr cen) (cadr ptFoot))))
-    ;; Наружу: вектор от центра к ptFoot
-    ((= mode "outside")
      (setq dx (- (car ptFoot) (car cen))
            dy (- (cadr ptFoot) (cadr cen))))
+    ;; Наружу: вектор от ptFoot к центру (от контура внутрь)
+    ;; [v3.4] Инвертировано относительно остальных замкнутых фигур
+    ((= mode "outside")
+     (setq dx (- (car cen) (car ptFoot))
+           dy (- (cadr cen) (cadr ptFoot))))
     ;; К точке: вектор от ptFoot к ptReal
     (T
      (setq dx (- (car ptReal) (car ptFoot))
@@ -315,10 +317,11 @@
     ((and (geo:circle-p ent) (member mode '("inside" "outside")))
      (setq isInside (geo:point-inside-circle ent ptReal))
      (cond
-       ;; inside: стрелка внутрь, точка снаружи > Flip
-       ((and (= mode "inside")  (not isInside)) T)
-       ;; outside: стрелка наружу, точка внутри > Flip
-       ((and (= mode "outside") isInside) T)
+       ;; [v3.4] Инвертировано относительно остальных замкнутых фигур
+       ;; inside: стрелка наружу, точка внутри > Flip
+       ((and (= mode "inside")  isInside) T)
+       ;; outside: стрелка внутрь, точка снаружи > Flip
+       ((and (= mode "outside") (not isInside)) T)
        (T nil)))
     ;; === РАЗОМКНУТЫЙ КОНТУР ===
     ;; Стрелки слева, а точка справа > Flip
