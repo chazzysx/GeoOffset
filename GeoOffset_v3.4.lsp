@@ -390,7 +390,7 @@
   ;; а не через касательную + cross-z. Это гарантирует
   ;; корректное направление внутрь/наружу независимо от обхода.
   (if (geo:circle-p ent)
-    (geo:circle-arrow-angle ent ptFoot ptReal mode)
+    (- (geo:circle-arrow-angle ent ptFoot ptReal mode) (/ pi 2))
     ;; === ОСТАЛЬНЫЕ ТИПЫ: касательная + нормаль ===
     (progn
       (setq tang (geo:get-tangent ent ptFoot) dx (car tang) dy (cadr tang))
@@ -733,11 +733,11 @@
               (T                    (set_tile "prefix" "2")))
 
         (start_list "side_closed")
-        (mapcar 'add_list '("К точке" "Внутри" "Снаружи"))
+        (mapcar 'add_list '("К точке" "Снаружи" "Внутри"))
         (end_list)
         (cond ((= *geo:side-closed* "to_point") (set_tile "side_closed" "0"))
-              ((= *geo:side-closed* "inside")   (set_tile "side_closed" "1"))
-              ((= *geo:side-closed* "outside")  (set_tile "side_closed" "2")))
+              ((= *geo:side-closed* "outside")  (set_tile "side_closed" "1"))
+              ((= *geo:side-closed* "inside")   (set_tile "side_closed" "2")))
 
         (start_list "side_open")
         (mapcar 'add_list '("К точке" "Слева" "Справа"))
@@ -849,7 +849,7 @@
             "  (if (= selLayIdx " (itoa lastLayIdx) ")"
             "    (setq *geo:layer* (get_tile \"layer_new\"))"
             "    (setq *geo:layer* (nth selLayIdx *geo:layers-list*)))"
-            "  (setq *geo:side-closed* (nth (atoi (get_tile \"side_closed\")) (list \"to_point\" \"inside\" \"outside\")))"
+            "  (setq *geo:side-closed* (nth (atoi (get_tile \"side_closed\")) (list \"to_point\" \"outside\" \"inside\")))"
             "  (setq *geo:side-open*   (nth (atoi (get_tile \"side_open\"))   (list \"to_point\" \"left\" \"right\")))"
             "  (setq *geo:opt-onepoint* (get_tile \"opt_onepoint\"))"
             "  (setq *geo:opt-short*    (get_tile \"opt_short\"))"
