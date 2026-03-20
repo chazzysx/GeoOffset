@@ -30,7 +30,7 @@
 (if (null *geo:layer*)         (setq *geo:layer*         "Geo_deviation"))
 (if (null *geo:txtstyle*)      (setq *geo:txtstyle*      "Standard"))
 (if (null *geo:txtht*)         (setq *geo:txtht*         1.8))
-(if (null *geo:tol-plan*)      (setq *geo:tol-plan*      0.01))
+(setq *geo:tol-plan* 0.01)  ;; v3.4: всегда 0.01 при загрузке
 (if (null *geo:tol-plan-on*)   (setq *geo:tol-plan-on*   "1"))
 
 (if (null *geo:elev-mode*)     (setq *geo:elev-mode*     "manual"))
