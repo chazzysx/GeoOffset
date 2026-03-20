@@ -30,21 +30,16 @@
 (if (null *geo:layer*)         (setq *geo:layer*         "Geo_deviation"))
 (if (null *geo:txtstyle*)      (setq *geo:txtstyle*      "Standard"))
 (if (null *geo:txtht*)         (setq *geo:txtht*         1.8))
-(if (null *geo:tol-plan*)      (setq *geo:tol-plan*      0.05))
+(if (null *geo:tol-plan*)      (setq *geo:tol-plan*      0.01))
 (if (null *geo:tol-plan-on*)   (setq *geo:tol-plan-on*   "1"))
-(if (null *geo:tol-elev-on*)   (setq *geo:tol-elev-on*   "0"))
-(if (null *geo:tol-elev-lo*)  (setq *geo:tol-elev-lo*   0.0))
-(if (null *geo:tol-elev-hi*)  (setq *geo:tol-elev-hi*   0.0))
+
 (if (null *geo:elev-mode*)     (setq *geo:elev-mode*     "manual"))
 (if (null *geo:elev-val*)     (setq *geo:elev-val*      0.0))
-(if (null *geo:blk-scale*)    (setq *geo:blk-scale*     0.0))  ; 0 = авто (DIMSCALE)
+
 (if (null *geo:color*)         (setq *geo:color*         80))
 (if (null *geo:color-ok*)      (setq *geo:color-ok*      3))   ; зелёный = Хорошо
 (if (null *geo:color-fail*)    (setq *geo:color-fail*    1))   ; красный = Плохо
-(if (null *geo:opt-onepoint*)  (setq *geo:opt-onepoint*  "0"))
-(if (null *geo:opt-short*)     (setq *geo:opt-short*     "0"))
-(if (null *geo:opt-leader*)    (setq *geo:opt-leader*    "0"))
-(if (null *geo:opt-fixpos*)    (setq *geo:opt-fixpos*    "1"))
+
 (if (null *geo:proj-filter*)   (setq *geo:proj-filter*   nil))
 (if (null *geo:fact-filter*)   (setq *geo:fact-filter*   nil))
 (if (null *geo:proj-info*)     (setq *geo:proj-info*     "Не задан"))
@@ -424,18 +419,11 @@
 
 ;;; ================================================================
 ;;; МАСШТАБ БЛОКА
-;;; Если *geo:blk-scale* > 0 > используем его напрямую.
-;;; Если = 0 > используем DIMSCALE (стандартный способ).
-;;; DIMSCALE = масштабный коэффициент размерных стилей.
+;;; Используем DIMSCALE (стандартный масштабный коэффициент размерных стилей).
 ;;; ================================================================
 (defun geo:get-block-scale ( / ds )
-  (cond
-    ((and (numberp *geo:blk-scale*) (> *geo:blk-scale* 0))
-     *geo:blk-scale*)
-    (T
-     (setq ds (getvar "DIMSCALE"))
-     (if (or (null ds) (<= ds 0)) 1.0 ds)))
-)
+  (setq ds (getvar "DIMSCALE"))
+  (if (or (null ds) (<= ds 0)) 1.0 ds))
 
 ;;; ================================================================
 ;;; ENTSEL > ФИЛЬТР
@@ -547,13 +535,7 @@
   (write-line "          : toggle { label = \"В плане:\"; key = \"tol_plan_on\"; width = 14; }" f)
   (write-line "          : edit_box { key = \"tol_plan\"; edit_width = 8; fixed_width = true; }" f)
   (write-line "        }" f)
-  ;; По высоте
-  (write-line "        : row {" f)
-  (write-line "          : toggle { label = \"По высоте:\"; key = \"tol_elev_on\"; width = 14; }" f)
-  (write-line "          : edit_box { key = \"tol_elev_lo\"; edit_width = 5; fixed_width = true; }" f)
-  (write-line "          : text { label = \"-\"; width = 1; }" f)
-  (write-line "          : edit_box { key = \"tol_elev_hi\"; edit_width = 5; fixed_width = true; }" f)
-  (write-line "        }" f)
+
   ;; Цвета: надписи сверху, image_button снизу
   (write-line "        : row {" f)
   (write-line "          : column {" f)
@@ -585,11 +567,6 @@
   (write-line "          : text { label = \"k=\"; width = 3; }" f)
   (write-line "          : edit_box { key = \"coeff\"; edit_width = 6; }" f)
   (write-line "          : popup_list { key = \"precision\"; width = 8; }" f)
-  (write-line "          : popup_list { key = \"prefix\"; width = 5; }" f)
-  (write-line "        }" f)
-  (write-line "        : row {" f)
-  (write-line "          : text { label = \"Масштаб блока (0=DIMSCALE):\"; width = 26; }" f)
-  (write-line "          : edit_box { key = \"blk_scale\"; edit_width = 8; fixed_width = true; }" f)
   (write-line "        }" f)
   (write-line "      }" f)
 
@@ -640,15 +617,6 @@
   (write-line "    }" f)
   (write-line "  }" f)
 
-  ;; < Опции >
-  (write-line "  : boxed_column {" f)
-  (write-line "    label = \"Опции\";" f)
-  (write-line "    : toggle { label = \"Углы снимали одной точкой\"; key = \"opt_onepoint\"; }" f)
-  (write-line "    : toggle { label = \"Короткие стрелки\";         key = \"opt_short\"; }" f)
-  (write-line "    : toggle { label = \"Отметка на выноске\";       key = \"opt_leader\"; }" f)
-  (write-line "    : toggle { label = \"Фиксированное положение атрибута\"; key = \"opt_fixpos\"; }" f)
-  (write-line "  }" f)
-
   ;; Кнопки
   (write-line "  : row {" f)
   (write-line "    : button { label = \"Справка\"; key = \"btn_help\"; width = 12; fixed_width = true; }" f)
@@ -680,26 +648,18 @@
   (if (not (numberp *geo:coeff*))       (setq *geo:coeff*       1000.0))
   (if (not (numberp *geo:precision*))   (setq *geo:precision*   0))
   (if (not (numberp *geo:txtht*))       (setq *geo:txtht*       1.8))
-  (if (not (numberp *geo:tol-plan*))    (setq *geo:tol-plan*    0.05))
-  (if (not (numberp *geo:tol-elev-lo*)) (setq *geo:tol-elev-lo* 0.0))
-  (if (not (numberp *geo:tol-elev-hi*)) (setq *geo:tol-elev-hi* 0.0))
+  (if (not (numberp *geo:tol-plan*))    (setq *geo:tol-plan*    0.01))
   (if (not (numberp *geo:elev-val*))    (setq *geo:elev-val*    0.0))
-  (if (not (numberp *geo:blk-scale*))   (setq *geo:blk-scale*   0.0))
   (if (not (numberp *geo:color*))       (setq *geo:color*       80))
   (if (not (numberp *geo:color-ok*))    (setq *geo:color-ok*    3))
   (if (not (numberp *geo:color-fail*))  (setq *geo:color-fail*  1))
-  (if (/= (type *geo:prefix*) 'STR)      (setq *geo:prefix*      "+"))
   (if (/= (type *geo:layer*) 'STR)       (setq *geo:layer*       "Geo_deviation"))
   (if (/= (type *geo:txtstyle*) 'STR)    (setq *geo:txtstyle*    "Standard"))
   (if (/= (type *geo:tol-plan-on*) 'STR) (setq *geo:tol-plan-on* "1"))
-  (if (/= (type *geo:tol-elev-on*) 'STR) (setq *geo:tol-elev-on* "0"))
   (if (/= (type *geo:side-closed*) 'STR) (setq *geo:side-closed* "to_point"))
   (if (/= (type *geo:side-open*) 'STR)   (setq *geo:side-open*   "to_point"))
   (if (/= (type *geo:elev-mode*) 'STR)   (setq *geo:elev-mode*   "manual"))
-  (if (/= (type *geo:opt-onepoint*) 'STR)(setq *geo:opt-onepoint* "0"))
-  (if (/= (type *geo:opt-short*) 'STR)   (setq *geo:opt-short*   "0"))
-  (if (/= (type *geo:opt-leader*) 'STR)  (setq *geo:opt-leader*  "0"))
-  (if (/= (type *geo:opt-fixpos*) 'STR)  (setq *geo:opt-fixpos*  "1"))
+
 
 
   (setq *geo:styles-list* (geo:get-text-styles)
@@ -725,13 +685,6 @@
         (end_list)
         (set_tile "precision" (geo:safe-itoa *geo:precision*))
 
-        (start_list "prefix")
-        (mapcar 'add_list '("+" "-" " "))
-        (end_list)
-        (cond ((= *geo:prefix* "+") (set_tile "prefix" "0"))
-              ((= *geo:prefix* "-") (set_tile "prefix" "1"))
-              (T                    (set_tile "prefix" "2")))
-
         (start_list "side_closed")
         (mapcar 'add_list '("К точке" "Снаружи" "Внутри"))
         (end_list)
@@ -749,13 +702,9 @@
         ;; --- Текущие значения ---
         (set_tile "tol_plan_on"  *geo:tol-plan-on*)
         (set_tile "tol_plan"     (geo:safe-rtos *geo:tol-plan* 2 4))
-        (set_tile "tol_elev_on"  *geo:tol-elev-on*)
-        (set_tile "tol_elev_lo"  (geo:safe-rtos *geo:tol-elev-lo* 2 2))
-        (set_tile "tol_elev_hi"  (geo:safe-rtos *geo:tol-elev-hi* 2 2))
         (set_tile "elev_val"     (geo:safe-rtos *geo:elev-val* 2 3))
         (set_tile "elev_from_obj" (if (and *geo:elev-mode* (= *geo:elev-mode* "object")) "1" "0"))
         (set_tile "coeff"        (geo:safe-rtos *geo:coeff* 2 0))
-        (set_tile "blk_scale"    (geo:safe-rtos *geo:blk-scale* 2 1))
         (set_tile "txt_height"   (geo:safe-rtos *geo:txtht* 2 1))
 
         ;; Стиль текста (vl-position может вернуть nil)
@@ -775,11 +724,7 @@
             (set_tile "layer_new" *geo:layer*)
             (mode_tile "layer_new" 0)))
 
-        ;; Тогглы
-        (set_tile "opt_onepoint" *geo:opt-onepoint*)
-        (set_tile "opt_short"    *geo:opt-short*)
-        (set_tile "opt_leader"   *geo:opt-leader*)
-        (set_tile "opt_fixpos"   *geo:opt-fixpos*)
+
 
         ;; mode_tile: проектная отметка
         (if (= *geo:elev-mode* "object")
@@ -834,15 +779,10 @@
             "(progn"
             "  (setq *geo:tol-plan-on* (get_tile \"tol_plan_on\"))"
             "  (setq *geo:tol-plan*    (atof (get_tile \"tol_plan\")))"
-            "  (setq *geo:tol-elev-on* (get_tile \"tol_elev_on\"))"
-            "  (setq *geo:tol-elev-lo* (atof (get_tile \"tol_elev_lo\")))"
-            "  (setq *geo:tol-elev-hi* (atof (get_tile \"tol_elev_hi\")))"
             "  (setq *geo:elev-val*    (atof (get_tile \"elev_val\")))"
             "  (setq *geo:elev-mode*   (if (= (get_tile \"elev_from_obj\") \"1\") \"object\" \"manual\"))"
             "  (setq *geo:coeff*       (atof (get_tile \"coeff\")))"
-            "  (setq *geo:blk-scale*   (atof (get_tile \"blk_scale\")))"
             "  (setq *geo:precision*   (atoi (get_tile \"precision\")))"
-            "  (setq *geo:prefix*      (nth (atoi (get_tile \"prefix\")) (list \"+\" \"-\" \" \")))"
             "  (setq *geo:txtht*       (atof (get_tile \"txt_height\")))"
             "  (setq *geo:txtstyle*    (nth (atoi (get_tile \"txt_style\")) *geo:styles-list*))"
             "  (setq selLayIdx (atoi (get_tile \"layer_sel\")))"
@@ -851,10 +791,6 @@
             "    (setq *geo:layer* (nth selLayIdx *geo:layers-list*)))"
             "  (setq *geo:side-closed* (nth (atoi (get_tile \"side_closed\")) (list \"to_point\" \"outside\" \"inside\")))"
             "  (setq *geo:side-open*   (nth (atoi (get_tile \"side_open\"))   (list \"to_point\" \"left\" \"right\")))"
-            "  (setq *geo:opt-onepoint* (get_tile \"opt_onepoint\"))"
-            "  (setq *geo:opt-short*    (get_tile \"opt_short\"))"
-            "  (setq *geo:opt-leader*   (get_tile \"opt_leader\"))"
-            "  (setq *geo:opt-fixpos*   (get_tile \"opt_fixpos\"))"
             "  (done_dialog 1))"
           )
         )
